@@ -27,11 +27,13 @@ import {
 } from './notificationTap.js';
 import { clear_query_param } from './parseSharedPath.js';
 import { getPushClient, registerPushClient } from './pushClient.js';
+import { syncBrowserPush } from './pushSync.js';
 import { webPushClient } from './webPushClient.js';
 
 export const WORKER_URL = '/sw.js';
 export const WORKER_CLICK_MESSAGE = 'puter-notification-click';
 export const WORKER_CLICK_ACK_MESSAGE = 'puter-notification-click-ack';
+export const WORKER_SUBSCRIPTION_CHANGED_MESSAGE = 'puter-push-subscription-changed';
 
 /**
  * @param {Object} [params] - `window.gui_params`
@@ -47,7 +49,8 @@ let started = false;
 
 /**
  * @param {{ params?: Object, nav?: Navigator, query?: URLSearchParams,
- *     clearParam?: (name: string) => void, framed?: boolean }} [env]
+ *     clearParam?: (name: string) => void, framed?: boolean,
+ *     resync?: () => unknown }} [env] `resync` runs when the worker replaced the subscription
  * @returns {Promise<void>}
  */
 export const startPushWorker = async ({
@@ -56,6 +59,7 @@ export const startPushWorker = async ({
     query = globalThis.url_query_params,
     clearParam = clear_query_param,
     framed = globalThis.top !== globalThis.self,
+    resync = () => syncBrowserPush(),
 } = {}) => {
     if ( started || framed ) return;
     started = true;
@@ -72,6 +76,10 @@ export const startPushWorker = async ({
         registerPushClient(webPushClient());
     }
     nav.serviceWorker.addEventListener('message', (event) => {
+        if ( event.data?.type === WORKER_SUBSCRIPTION_CHANGED_MESSAGE ) {
+            void resync();
+            return;
+        }
         if ( event.data?.type !== WORKER_CLICK_MESSAGE || ! normalizePushTap(event.data.notification) ) return;
         event.source?.postMessage?.({ type: WORKER_CLICK_ACK_MESSAGE, id: event.data.id });
         dispatchPushTap(event.data.notification);

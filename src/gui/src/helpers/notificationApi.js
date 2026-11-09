@@ -204,6 +204,16 @@ export async function sendTestPush (uid) {
     await pushCall('POST', `/push/devices/${encodeURIComponent(uid)}/test`);
 }
 
+/** The server's answer for this browser's subscription at `endpoint`, or null when it can't tell. Never rejects. @param {string} endpoint @returns {Promise<'active'|'removed'|'revoked'|'unknown'|null>} */
+export async function webPushEndpointState (endpoint) {
+    try {
+        const { state } = await pushCall('POST', '/push/web/subscriptions/status', { endpoint });
+        return ['active', 'removed', 'revoked', 'unknown'].includes(state) ? state : null;
+    } catch {
+        return null;
+    }
+}
+
 /** @returns {Promise<PushApp[]>} */
 export async function listPushApps () {
     const { apps } = await pushCall('GET', '/push/apps');
