@@ -29,6 +29,8 @@ let registerPushClient;
 let browser;
 /** What `/auth/check-permissions` answers for `notifications:push`. */
 let held;
+/** What `/push/apps` lists. */
+let apps;
 
 beforeAll(async () => {
     globalThis.window = globalThis.window ?? globalThis;
@@ -52,6 +54,7 @@ const from = (app_uid) => ({
 beforeEach(() => {
     browser = { permission: 'granted', registered: true };
     held = true;
+    apps = [];
     window.gui_params = { pushEnabled: true };
     window.api_origin = 'https://api.puter.test';
     window.auth_token = 'tok-1';
@@ -67,6 +70,9 @@ beforeEach(() => {
         if ( url.endsWith('/auth/check-permissions') ) {
             return { ok: true, json: async () => ({ permissions: { 'notifications:push': held } }) };
         }
+        if ( url.endsWith('/push/apps') ) {
+            return { ok: true, json: async () => ({ apps }) };
+        }
         return { ok: true, json: async () => ({}) };
     });
 });
@@ -81,6 +87,18 @@ describe('the pushStatus IPC handler', () => {
             permissions: ['notifications:push'],
             app_uid: 'app-1',
         });
+    });
+
+    it('is off for an app whose only grant came from its website`s Web Push', async () => {
+        apps = [{ uid: 'app-1', name: 'chat', puterDevices: false }];
+        const { pushStatus } = await makeService();
+        await expect(pushStatus({}, from('app-1'))).resolves.toEqual({ state: 'off' });
+    });
+
+    it('is on for an app allowed in Puter`s prompt', async () => {
+        apps = [{ uid: 'app-1', name: 'chat', puterDevices: true }];
+        const { pushStatus } = await makeService();
+        await expect(pushStatus({}, from('app-1'))).resolves.toEqual({ state: 'on' });
     });
 
     it('is off for an app without the permission', async () => {

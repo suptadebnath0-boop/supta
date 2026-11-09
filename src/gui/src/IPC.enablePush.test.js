@@ -106,10 +106,10 @@ beforeEach(() => {
     globalThis.services = { get: () => ({ get_by_uuid: () => ({ name: 'caller', uuid: 'inst-1' }) }) };
 });
 
-const post = (msg) =>
+const post = (msg, extra = {}) =>
     window.dispatchEvent(
         new MessageEvent('message', {
-            data: { appInstanceID: 'inst-1', env: 'app', msg, uuid: 'cb-1' },
+            data: { appInstanceID: 'inst-1', env: 'app', msg, uuid: 'cb-1', ...extra },
             source: iframe.contentWindow,
             origin: 'https://app.example',
         }),
@@ -117,15 +117,57 @@ const post = (msg) =>
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
-/** What /auth/check-permissions answers for notifications:push. */
-const holds = (value) => {
+/** What /auth/check-permissions answers for notifications:push, and /push/apps lists. */
+const holds = (value, apps = []) => {
     globalThis.fetch = vi.fn(async (url, init) => ({
         ok: true,
-        json: async () => ({ permissions: { 'notifications:push': value } }),
+        json: async () => (url.endsWith('/push/apps')
+            ? { apps }
+            : { permissions: { 'notifications:push': value } }),
         url,
         init,
     }));
 };
+
+/** A grant written by the app's own website through Web Push. */
+const websiteOnly = () => holds(true, [{ uid: 'app-1', name: 'team-chat', puterDevices: false }]);
+
+describe('push held only from a website`s own Web Push', () => {
+    it('shows Puter`s permission dialog on enablePush, not the turn-on dialog', async () => {
+        websiteOnly();
+        permissionDialog.mockResolvedValue(false);
+        post('enablePush');
+        await settle();
+
+        expect(permissionDialog).toHaveBeenCalledWith(expect.objectContaining({ permission: 'notifications:push', app_uid: 'app-1' }));
+        expect(dialog).not.toHaveBeenCalled();
+    });
+
+    it('shows Puter`s permission dialog on requestPermission', async () => {
+        websiteOnly();
+        permissionDialog.mockResolvedValue(true);
+        post('requestPermission', { options: { permission: 'notifications:push' } });
+        await settle();
+
+        expect(permissionDialog).toHaveBeenCalledTimes(1);
+        expect(posted).toHaveBeenCalledWith(
+            { msg: 'permissionGranted', granted: true, original_msg_id: 'cb-1' },
+            '*',
+        );
+    });
+
+    it('answers requestPermission without a dialog when the app may push to Puter`s devices', async () => {
+        holds(true, [{ uid: 'app-1', name: 'team-chat', puterDevices: true }]);
+        post('requestPermission', { options: { permission: 'notifications:push' } });
+        await settle();
+
+        expect(permissionDialog).not.toHaveBeenCalled();
+        expect(posted).toHaveBeenCalledWith(
+            { msg: 'permissionGranted', granted: true, original_msg_id: 'cb-1' },
+            '*',
+        );
+    });
+});
 
 describe('the enablePush IPC message', () => {
     it('offers the dialog for the calling app and reports the state', async () => {

@@ -116,6 +116,18 @@ const permissionsOf = (details) => {
  */
 
 /**
+ * A push request inside the desktop, which answers it itself: a grant from the
+ * app's own Web Push confirmation doesn't reach Puter's devices.
+ *
+ * @param {PermsQuery} query
+ * @returns {boolean}
+ */
+const leftToDesktop = ({ ctx, permissions, prompt }) =>
+    prompt &&
+    ctx.puter.env === 'app' &&
+    permissions.includes(PUSH_NOTIFICATIONS_PERMISSION);
+
+/**
  * Per resource: the permission strings it needs (`permissions`, which also
  * validates the details), whether they are already held (`check`), and the
  * value once held (`resolve`). `pooled: false` marks a resource whose `check`
@@ -177,7 +189,8 @@ const RESOURCES = Object.assign(Object.create(null), {
             assertKnownFields(details, []);
             return [PUSH_NOTIFICATIONS_PERMISSION];
         },
-        check: async ({ permissions, holds }) => holds(permissions),
+        check: async (query) =>
+            !leftToDesktop(query) && query.holds(query.permissions),
         resolve: async (_query, held) => held,
     },
 
@@ -322,7 +335,8 @@ const RESOURCES = Object.assign(Object.create(null), {
 
     permission: {
         permissions: async ({ details }) => permissionsOf(details),
-        check: async ({ permissions, holds }) => holds(permissions),
+        check: async (query) =>
+            !leftToDesktop(query) && query.holds(query.permissions),
         resolve: async (_query, held) => held,
     },
 });

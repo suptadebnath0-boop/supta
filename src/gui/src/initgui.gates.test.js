@@ -102,9 +102,15 @@ describe('the permission popup and browser push', () => {
         expect(requestPermission).not.toContain('setTimeout');
     });
 
-    it('shows the enable-push dialog only for a site whose app may send pushes', () => {
+    it('skips the permission dialog only for a push grant that reaches Puter devices', () => {
+        const held = requestPermission.indexOf('await appHoldsForPuter(permissions, window.host_app_uid');
+        expect(held).toBeGreaterThan(-1);
+        expect(held).toBeLessThan(requestPermission.indexOf('await UIPermissionDialog({'));
+    });
+
+    it('shows the enable-push dialog only for a site whose app may push to Puter devices', () => {
         const resolved = enablePush.indexOf('await window.getAppUIDFromOrigin(origin)');
-        const checked = enablePush.indexOf('await appHoldsPermissions([PUSH_PERMISSION], app_uid)');
+        const checked = enablePush.indexOf('await appPushesToPuter(app_uid)');
         const dialog = enablePush.indexOf('await UIEnablePushDialog({ origin })');
         expect(resolved).toBeGreaterThan(-1);
         expect(checked).toBeGreaterThan(resolved);

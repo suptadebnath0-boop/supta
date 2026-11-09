@@ -40,7 +40,7 @@ import UIAuthSignup from './UI/Auth/UIAuthSignup.js';
 import UINotification from './UI/UINotification.js';
 
 import { renewGodmodeToken } from './helpers/godmodeTokens.js';
-import { appHoldsPermissions } from './helpers/holdsPermissions.js';
+import { appHoldsForPuter, appPushesToPuter } from './helpers/pushApps.js';
 import {
     browserPushState,
     PUSH_PERMISSION,
@@ -1438,6 +1438,14 @@ const ipc_listener = async (event, handled) => {
             return;
         }
 
+        // The SDK leaves push to the desktop, which tells a website's own grant apart.
+        if ( requested_permissions.includes(PUSH_PERMISSION)
+            && await appHoldsForPuter(requested_permissions, app_uuid).catch(() => false) )
+        {
+            respond(true);
+            return;
+        }
+
         let granted = await UIPermissionDialog({
             // Both forms: the dialog reads `permissions`, and `permission` keeps
             // the single-scope path working for callers (and dialog versions)
@@ -1557,7 +1565,7 @@ const ipc_listener = async (event, handled) => {
             let state = 'unavailable';
             try {
                 // The push dialog says this app wants to send pushes, so an app that may not asks for that first.
-                state = await appHoldsPermissions([PUSH_PERMISSION], app_uuid)
+                state = await appPushesToPuter(app_uuid)
                     ? await UIEnablePushDialog({ app_name })
                     : await ask_push_permission(app_uuid, app_name);
             } catch ( e ) {
