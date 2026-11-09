@@ -276,7 +276,11 @@ async function keepSubscription (scope, event) {
     if ( old && ! keys.some((key) => sameKey(old, key)) ) return;
     // The page asks the server whether the old endpoint was removed before registering again.
     const receipt = await idb('readonly', (s) => s.get(RECEIPT_PREFIX + registration.scope));
-    const oldEndpoint = nonEmptyString(event.oldSubscription?.endpoint) ?? nonEmptyString(receipt?.endpoint);
+    const earlier = await idb('readonly', (s) => s.get(CHANGED_PREFIX + registration.scope));
+    // A mark no page handled yet keeps the endpoint the server last knew.
+    const oldEndpoint = nonEmptyString(earlier?.oldEndpoint)
+        ?? nonEmptyString(event.oldSubscription?.endpoint)
+        ?? nonEmptyString(receipt?.endpoint);
     await idb('readwrite', (s) => s.put({ at: Date.now(), ...(oldEndpoint ? { oldEndpoint } : {}) }, CHANGED_PREFIX + registration.scope));
     // The receipt names the old endpoint and keys.
     await idb('readwrite', (s) => s.delete(RECEIPT_PREFIX + registration.scope));

@@ -18,7 +18,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cachedPushApps, forgetPushApps, PUSH_APPS_TTL_MS, revokePushApp } from './notificationApi.js';
+import { cachedPushApps, forgetPushApps, PUSH_APPS_TTL_MS, revokePushApp, webPushEndpointState } from './notificationApi.js';
 import { appHoldsForPuter, pushGrantOf } from './pushApps.js';
 
 const PUSH = 'notifications:push';
@@ -95,6 +95,20 @@ describe('cachedPushApps', () => {
         fetch.mockResolvedValueOnce(new Response('{}', { status: 500 }));
         await expect(cachedPushApps(1000)).rejects.toThrow();
         await expect(cachedPushApps(1000)).resolves.toEqual([{ uid: 'app-1' }]);
+    });
+});
+
+describe('webPushEndpointState', () => {
+    it('tells a 429 apart from a server that can`t answer', async () => {
+        globalThis.window = globalThis.window ?? globalThis;
+        window.api_origin = 'https://api.puter.test';
+        const reply = (status, body) => new Response(JSON.stringify(body), { status });
+        globalThis.fetch = vi.fn(async () => reply(200, { state: 'removed' }));
+        await expect(webPushEndpointState('https://push.test/1')).resolves.toBe('removed');
+        fetch.mockResolvedValueOnce(reply(429, { code: 'too_many_requests' }));
+        await expect(webPushEndpointState('https://push.test/1')).resolves.toBe('busy');
+        fetch.mockResolvedValueOnce(reply(404, { code: 'not_found' }));
+        await expect(webPushEndpointState('https://push.test/1')).resolves.toBeNull();
     });
 });
 

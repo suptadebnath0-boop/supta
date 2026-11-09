@@ -396,6 +396,12 @@ describe('service worker pushsubscriptionchange', () => {
         expect(worker.idb.map.get(CHANGED)).toEqual({ at: expect.any(Number), oldEndpoint: 'https://push.example/old' });
     });
 
+    it('keeps the earlier endpoint of a mark no page handled yet', async () => {
+        const worker = loadWorker({ handlers: { ...pushOn, [CHANGED]: { at: 1, oldEndpoint: 'https://push.example/first' } } });
+        await worker.fire('pushsubscriptionchange', { oldSubscription: { ...keyOf(KEY), endpoint: 'https://push.example/second' } });
+        expect(worker.idb.map.get(CHANGED)).toEqual({ at: expect.any(Number), oldEndpoint: 'https://push.example/first' });
+    });
+
     it('subscribes again with Puter`s stored key when the browser dropped it', async () => {
         const worker = loadWorker({ handlers: pushOn });
         await worker.fire('pushsubscriptionchange', { oldSubscription: keyOf(KEY), newSubscription: null });

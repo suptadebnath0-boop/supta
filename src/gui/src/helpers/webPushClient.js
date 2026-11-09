@@ -37,6 +37,7 @@ export const SUBSCRIPTION_CHANGED_PREFIX = 'puter:subscription-changed:';
 export const LAST_ENDPOINT_KEY = 'puter.push.last-endpoint';
 
 const removedError = () => Object.assign(new Error('this browser was removed from push in Puter'), { code: 'push_device_removed' });
+const busyError = () => Object.assign(new Error('Puter asked to wait before registering this browser'), { code: 'too_many_requests' });
 
 /** Runs one request on the handlers store. @param {IDBFactory} idb @param {IDBTransactionMode} mode @param {(store: IDBObjectStore) => IDBRequest} action */
 const handlersStore = (idb, mode, action) => new Promise((resolve, reject) => {
@@ -134,19 +135,20 @@ export const webPushClient = ({
             // The next load registers again.
         }
     };
-    /** Whether the server says the user removed this browser's last known endpoint; if so, ends the subscription here. */
+    /** `'removed'` when the user removed any earlier endpoint of this browser, ending the subscription here; `'busy'` on a 429. */
     const removedElsewhere = async () => {
         const worker = await registration();
         const mark = worker?.scope ? await marker(worker.scope) : null;
-        const previous = typeof mark?.oldEndpoint === 'string' ? mark.oldEndpoint : lastEndpoint();
-        if ( ! previous || await endpointState(previous) !== 'removed' ) return false;
+        const earlier = [...new Set([mark?.oldEndpoint, lastEndpoint()].filter((e) => typeof e === 'string' && e))];
+        const states = await Promise.all(earlier.map((endpoint) => endpointState(endpoint)));
+        if ( ! states.includes('removed') ) return states.includes('busy') ? 'busy' : null;
         try {
             await (await worker?.pushManager?.getSubscription())?.unsubscribe();
         } catch ( e ) {
             // The next background run asks again.
         }
         await clearChanged();
-        return true;
+        return 'removed';
     };
     return {
         // Not async before `enable()`: it asks the browser inside the click.
@@ -154,8 +156,10 @@ export const webPushClient = ({
             forgetOn();
             forgetPushApps();
             const turningOn = background
-                ? removedElsewhere().then(async (removed) => {
-                    if ( removed ) throw removedError();
+                ? removedElsewhere().then(async (earlier) => {
+                    if ( earlier === 'removed' ) throw removedError();
+                    // The mark stays, so the next run asks again.
+                    if ( earlier === 'busy' ) throw busyError();
                     await notifications._enableWebPush(GUI_WORKER, { renewRemoved: false });
                     return true;
                 })
@@ -199,7 +203,7 @@ export const webPushClient = ({
             const reading = generation;
             // Devices match by session, so the endpoint tells whether it is this subscription.
             const [device, state] = await check(user, subscription.endpoint);
-            const registered = !! device && (state === 'active' || state === null);
+            const registered = !! device && (state === 'active' || state === null || state === 'busy');
             if ( registered && state === 'active' ) rememberEndpoint(subscription.endpoint);
             if ( reading === generation ) {
                 // Only an `on` the server confirmed for this endpoint is kept.

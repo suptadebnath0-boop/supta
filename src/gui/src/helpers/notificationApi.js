@@ -204,13 +204,13 @@ export async function sendTestPush (uid) {
     await pushCall('POST', `/push/devices/${encodeURIComponent(uid)}/test`);
 }
 
-/** The server's answer for this browser's subscription at `endpoint`, or null when it can't tell. Never rejects. @param {string} endpoint @returns {Promise<'active'|'removed'|'revoked'|'unknown'|null>} */
+/** The server's answer for this browser's subscription at `endpoint`, `'busy'` on a 429, or null when it can't tell. Never rejects. @param {string} endpoint @returns {Promise<'active'|'removed'|'revoked'|'unknown'|'busy'|null>} */
 export async function webPushEndpointState (endpoint) {
     try {
         const { state } = await pushCall('POST', '/push/web/subscriptions/status', { endpoint });
         return ['active', 'removed', 'revoked', 'unknown'].includes(state) ? state : null;
-    } catch {
-        return null;
+    } catch ( e ) {
+        return e?.status === 429 ? 'busy' : null;
     }
 }
 

@@ -315,6 +315,39 @@ describe('webPushClient and a browser removed from another device', () => {
         expect(made.storage.map.get(LAST_ENDPOINT_KEY)).toBe(NEW.endpoint);
     });
 
+    it('stays off when the removed endpoint is two subscription changes back', async () => {
+        const made = removedElsewhere({
+            idb: fakeIdb({ [CHANGED]: { at: 2, oldEndpoint: 'https://push.test/0b' } }),
+            storage: fakeStorage({ [LAST_ENDPOINT_KEY]: OLD }),
+        });
+        await expect(sync(made.storage)).resolves.toBe('removed');
+        expect(made.endpointState).toHaveBeenCalledWith('https://push.test/0b');
+        expect(made.endpointState).toHaveBeenCalledWith(OLD);
+        expect(made.notifications._enableWebPush).not.toHaveBeenCalled();
+        expect(made.storage.map.get(OPT_OUT)).toBe('1');
+    });
+
+    it('registers nothing while the server answers 429, keeps the mark, and goes ahead on the next run', async () => {
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
+        made.endpointState.mockResolvedValue('busy');
+        await expect(sync(made.storage)).resolves.toBe('later');
+        expect(made.notifications._enableWebPush).not.toHaveBeenCalled();
+        expect(made.idb.map.has(CHANGED)).toBe(true);
+        expect(made.storage.map.has(OPT_OUT)).toBe(false);
+
+        made.endpointState.mockResolvedValue('unknown');
+        made.notifications.listDevices.mockResolvedValue([current]);
+        await expect(sync(made.storage)).resolves.toBe('on');
+        expect(made.notifications._enableWebPush).toHaveBeenCalledTimes(1);
+    });
+
+    it('turns on from a click while the server answers 429', async () => {
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
+        made.endpointState.mockResolvedValue('busy');
+        made.notifications.listDevices.mockResolvedValue([current]);
+        await expect(made.client.enable()).resolves.toEqual({ deviceUid: 'd1' });
+    });
+
     it('registers in the background as before when the old endpoint wasn`t removed', async () => {
         const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
         made.endpointState.mockResolvedValue('unknown');

@@ -29,7 +29,7 @@ import {
     setBrowserPushOptOut,
 } from './pushClient.js';
 
-/** @typedef {'skipped'|'opted_out'|'unavailable'|'blocked'|'on'|'off'|'no_app'|'removed'|'failed'} PushSyncResult */
+/** @typedef {'skipped'|'opted_out'|'unavailable'|'blocked'|'on'|'off'|'no_app'|'removed'|'later'|'failed'} PushSyncResult */
 
 /** @type {Promise<PushSyncResult>|null} */
 let inFlight = null;
@@ -69,6 +69,7 @@ const runSync = async ({ appUid } = {}, {
             setBrowserPushOptOut(userUid, true, storage);
             return 'removed';
         }
+        if ( e?.code === 'too_many_requests' ) return 'later';
         console.debug('[push] enable failed', e);
         return 'failed';
     }
