@@ -21,6 +21,12 @@
 
 import { webPushEndpointState } from './notificationApi.js';
 
+/** The GUI's worker, as `puter.notifications` registers it. */
+const GUI_WORKER = { url: '/sw.js', scope: '/' };
+
+/** What `/sw.js` posts when the browser replaced the subscription. */
+const SUBSCRIPTION_CHANGED_MESSAGE = 'puter-push-subscription-changed';
+
 // Where `/sw.js` marks a subscription the browser replaced, as puter.js's pushStore.js does.
 const DB_NAME = 'puter-push';
 const HANDLERS = 'handlers';
@@ -59,9 +65,22 @@ export const webPushClient = ({
     notifications = globalThis.puter?.notifications,
     NotificationApi = globalThis.Notification,
     nav = globalThis.navigator,
+    userUid = () => globalThis.user?.uuid,
     idb = globalThis.indexedDB,
     endpointState = webPushEndpointState,
 } = {}) => {
+    // The last `on` this page read; a new page always asks the server.
+    /** @type {{ userUid: string, endpoint: string, deviceUid: string }|null} */
+    let lastOn = null;
+    let generation = 0;
+    const forgetOn = () => {
+        lastOn = null;
+        generation++;
+    };
+    nav?.serviceWorker?.addEventListener?.('message', (event) => {
+        if ( event.data?.type === SUBSCRIPTION_CHANGED_MESSAGE ) forgetOn();
+    });
+
     const currentDevice = async () => {
         const devices = await notifications.listDevices();
         return devices.find((d) => d.current && d.platform === 'webpush') ?? null;
@@ -84,26 +103,55 @@ export const webPushClient = ({
     };
     return {
         // Not async before `enable()`: it asks the browser inside the click.
-        enable: () => notifications.enable().then(async (on) => {
-            if ( ! on ) throw new Error(`notifications ${NotificationApi?.permission ?? 'unavailable'}`);
-            const device = await currentDevice();
-            if ( ! device ) throw new Error('this browser was not registered');
-            await clearChanged();
-            return { deviceUid: device.uid };
-        }),
-        disable: async () => {
-            await notifications.disable();
+        enable: ({ background = false } = {}) => {
+            forgetOn();
+            const turningOn = background
+                ? notifications._enableWebPush(GUI_WORKER, { renewRemoved: false }).then(() => true)
+                : notifications.enable();
+            return turningOn.then(async (on) => {
+                if ( ! on ) throw new Error(`notifications ${NotificationApi?.permission ?? 'unavailable'}`);
+                const device = await currentDevice();
+                if ( ! device ) throw new Error('this browser was not registered');
+                await clearChanged();
+                return { deviceUid: device.uid };
+            });
         },
-        status: async () => {
+        disable: async () => {
+            forgetOn();
+            try {
+                await notifications.disable();
+            } finally {
+                forgetOn();
+            }
+        },
+        status: async ({ cached = false } = {}) => {
             const permission = NotificationApi?.permission ?? 'default';
             const worker = await registration();
             const subscription = await worker?.pushManager?.getSubscription();
-            if ( permission !== 'granted' || ! subscription ) return { permission, registered: false };
+            if ( permission !== 'granted' || ! subscription ) {
+                forgetOn();
+                return { permission, registered: false };
+            }
             // A subscription the browser replaced is registered again in full.
-            if ( await changed(worker.scope) ) return { permission, registered: false };
+            if ( await changed(worker.scope) ) {
+                forgetOn();
+                return { permission, registered: false };
+            }
+            const user = userUid();
+            if ( cached && lastOn && lastOn.userUid === user && lastOn.endpoint === subscription.endpoint ) {
+                return { permission, registered: true, deviceUid: lastOn.deviceUid };
+            }
+            const reading = generation;
             // Devices match by session, so the endpoint tells whether it is this subscription.
             const [device, state] = await Promise.all([currentDevice(), endpointState(subscription.endpoint)]);
-            return device && (state === 'active' || state === null)
+            const registered = !! device && (state === 'active' || state === null);
+            if ( reading === generation ) {
+                // Only an `on` the server confirmed for this endpoint is kept.
+                lastOn = registered && state === 'active' && user
+                    ? { userUid: user, endpoint: subscription.endpoint, deviceUid: device.uid }
+                    : null;
+            }
+            return registered
                 ? { permission, registered: true, deviceUid: device.uid }
                 : { permission, registered: false };
         },

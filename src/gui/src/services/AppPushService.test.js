@@ -61,9 +61,11 @@ beforeEach(() => {
     registerPushClient({
         enable: async () => ({ deviceUid: 'd-1' }),
         disable: async () => {},
-        status: async () => {
+        status: async (options) => {
+            browser.asked = options;
             if ( browser.broken ) throw new Error('no push service');
-            return { ...browser };
+            const { asked: _, ...status } = browser;
+            return status;
         },
     });
     globalThis.fetch = vi.fn(async (url, init) => {
@@ -99,6 +101,20 @@ describe('the pushStatus IPC handler', () => {
         apps = [{ uid: 'app-1', name: 'chat', puterDevices: true }];
         const { pushStatus } = await makeService();
         await expect(pushStatus({}, from('app-1'))).resolves.toEqual({ state: 'on' });
+    });
+
+    it('lets the browser answer with the on this page last read', async () => {
+        const { pushStatus } = await makeService();
+        await pushStatus({}, from('app-1'));
+        expect(browser.asked).toEqual({ cached: true });
+    });
+
+    it('checks the calling app on every call, while the browser answers from its last on', async () => {
+        const { pushStatus } = await makeService();
+        await expect(pushStatus({}, from('app-1'))).resolves.toEqual({ state: 'on' });
+        apps = [{ uid: 'app-2', name: 'site', puterDevices: false }];
+        await expect(pushStatus({}, from('app-2'))).resolves.toEqual({ state: 'off' });
+        expect(browser.asked).toEqual({ cached: true });
     });
 
     it('is off for an app without the permission', async () => {
