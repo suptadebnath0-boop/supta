@@ -115,7 +115,8 @@ const permissionsOf = (details) => {
  *   to `resolve`.
  */
 
-/** @param {PermsQuery} query A desktop push request, left to the desktop, which can tell a website's own grant apart. @returns {boolean} */
+// The desktop answers push requests: it tells a website's own grant apart.
+/** @param {PermsQuery} query @returns {boolean} */
 const leftToDesktop = ({ ctx, permissions, prompt }) =>
     prompt &&
     ctx.puter.env === 'app' &&
