@@ -18,11 +18,14 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SUBSCRIPTION_CHANGED_PREFIX as STORED_CHANGED_PREFIX } from '../../../puter-js/src/modules/notifications/lib/pushStore.js';
+import {
+    RECEIPT_PREFIX as STORED_RECEIPT_PREFIX,
+    SUBSCRIPTION_CHANGED_PREFIX as STORED_CHANGED_PREFIX,
+} from '../../../puter-js/src/modules/notifications/lib/pushStore.js';
 import { cachedPushApps } from './notificationApi.js';
 import { registerPushClient } from './pushClient.js';
 import { syncBrowserPush } from './pushSync.js';
-import { LAST_ENDPOINT_KEY, SUBSCRIPTION_CHANGED_PREFIX, webPushClient } from './webPushClient.js';
+import { LAST_ENDPOINT_KEY, RECEIPT_PREFIX, SUBSCRIPTION_CHANGED_PREFIX, webPushClient } from './webPushClient.js';
 
 const SCOPE = 'https://puter.test/';
 const CHANGED = `${STORED_CHANGED_PREFIX}${SCOPE}`;
@@ -299,6 +302,13 @@ describe('webPushClient and a browser removed from another device', () => {
         await expect(sync(made.storage)).resolves.toBe('opted_out');
     });
 
+    it('forgets the removed endpoint`s receipt when it stays off', async () => {
+        const RECEIPT = `${STORED_RECEIPT_PREFIX}${SCOPE}`;
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD }, [RECEIPT]: { endpoint: OLD, receipt: 'r.sig' } }) });
+        await expect(sync(made.storage)).resolves.toBe('removed');
+        expect(made.idb.map.has(RECEIPT)).toBe(false);
+    });
+
     it('stays off after the browser dropped the subscription, from the last endpoint the server confirmed', async () => {
         const made = removedElsewhere({ subscription: null, storage: fakeStorage({ [LAST_ENDPOINT_KEY]: OLD }) });
         await expect(sync(made.storage)).resolves.toBe('removed');
@@ -384,6 +394,7 @@ describe('webPushClient requests', () => {
 
     it('reads the marker under the key puter.js and the worker use', () => {
         expect(SUBSCRIPTION_CHANGED_PREFIX).toBe(STORED_CHANGED_PREFIX);
+        expect(RECEIPT_PREFIX).toBe(STORED_RECEIPT_PREFIX);
     });
 });
 

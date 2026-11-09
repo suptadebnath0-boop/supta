@@ -32,6 +32,7 @@ const DB_NAME = 'puter-push';
 const HANDLERS = 'handlers';
 const CLICKS = 'clicks';
 export const SUBSCRIPTION_CHANGED_PREFIX = 'puter:subscription-changed:';
+export const RECEIPT_PREFIX = 'puter:receipt:';
 
 /** The endpoint the server last confirmed for this browser, in `localStorage`. */
 export const LAST_ENDPOINT_KEY = 'puter.push.last-endpoint';
@@ -146,6 +147,11 @@ export const webPushClient = ({
             await (await worker?.pushManager?.getSubscription())?.unsubscribe();
         } catch ( e ) {
             // The next background run asks again.
+        }
+        try {
+            if ( worker?.scope ) await handlersStore(idb, 'readwrite', (s) => s.delete(RECEIPT_PREFIX + worker.scope));
+        } catch ( e ) {
+            // A receipt is only sent for its own endpoint.
         }
         await clearChanged();
         return 'removed';
