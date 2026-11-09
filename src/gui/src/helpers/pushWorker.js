@@ -48,9 +48,7 @@ export const pushWorkerEnabled = (params, nav) => (
 let started = false;
 
 /**
- * @param {{ params?: Object, nav?: Navigator, query?: URLSearchParams,
- *     clearParam?: (name: string) => void, framed?: boolean,
- *     resync?: () => unknown }} [env] `resync` runs when the worker replaced the subscription
+ * @param {{ params?: Object, nav?: Navigator, query?: URLSearchParams, clearParam?: (name: string) => void, framed?: boolean, resync?: () => unknown }} [env] `resync` runs when the worker replaced the subscription
  * @returns {Promise<void>}
  */
 export const startPushWorker = async ({

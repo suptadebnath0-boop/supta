@@ -492,8 +492,7 @@ export class NotificationsModule extends EventListener {
      * failed confirmation is tried again on the next load.
      *
      * @param {{ url: string; scope?: string }} worker
-     * @param {{ renewRemoved?: boolean }} [options] Without `renewRemoved`, a
-     *   browser the user removed in Puter rejects with `push_device_removed`.
+     * @param {{ renewRemoved?: boolean }} [options] Without `renewRemoved`, a removed browser rejects with `push_device_removed`.
      * @internal
      */
     async _enableWebPush(worker, { renewRemoved = true } = {}) {

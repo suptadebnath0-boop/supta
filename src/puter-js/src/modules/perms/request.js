@@ -115,13 +115,7 @@ const permissionsOf = (details) => {
  *   to `resolve`.
  */
 
-/**
- * A push request inside the desktop, which answers it itself: a grant from the
- * app's own Web Push confirmation doesn't reach Puter's devices.
- *
- * @param {PermsQuery} query
- * @returns {boolean}
- */
+/** @param {PermsQuery} query A desktop push request, left to the desktop, which can tell a website's own grant apart. @returns {boolean} */
 const leftToDesktop = ({ ctx, permissions, prompt }) =>
     prompt &&
     ctx.puter.env === 'app' &&

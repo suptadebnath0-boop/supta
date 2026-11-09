@@ -46,9 +46,7 @@ export class AppPushService extends Service {
     }
 
     /**
-     * IPC: this browser's push state for the calling app, `on` only while
-     * push is on here and the app may push to Puter's devices. An `on` this
-     * page already read for the browser counts; the app is checked each call.
+     * IPC: this browser's push state for the app, `on` only while push is on here (cached) and the app may push to Puter.
      *
      * @returns {Promise<{ state: 'on'|'off'|'blocked'|'unavailable' }>}
      */
