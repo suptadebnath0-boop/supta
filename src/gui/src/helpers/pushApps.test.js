@@ -17,8 +17,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { describe, expect, it, vi } from 'vitest';
-import { appHoldsForPuter } from './pushApps.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cachedPushApps, forgetPushApps, PUSH_APPS_TTL_MS, revokePushApp } from './notificationApi.js';
+import { appHoldsForPuter, pushGrantOf } from './pushApps.js';
 
 const PUSH = 'notifications:push';
 const listed = (...apps) => async () => apps;
@@ -46,6 +47,54 @@ describe('appHoldsForPuter', () => {
             throw Object.assign(new Error('nope'), { code });
         };
         await expect(appHoldsForPuter([PUSH], 'app-1', { holds, listApps: fails('push_unavailable') })).resolves.toBe(true);
+        const busy = async () => {
+            throw Object.assign(new Error('slow down'), { status: 429, code: 'too_many_requests' });
+        };
+        await expect(appHoldsForPuter([PUSH], 'app-1', { holds, listApps: busy })).resolves.toBe(true);
         await expect(appHoldsForPuter([PUSH], 'app-1', { holds, listApps: fails('internal_error') })).rejects.toThrow('nope');
     });
 });
+
+describe('pushGrantOf', () => {
+    it('tells no grant, Puter`s own, and a website`s Web Push grant apart', async () => {
+        await expect(pushGrantOf('app-1', { holds: async () => false, listApps: listed() })).resolves.toBe('none');
+        await expect(pushGrantOf('app-1', { holds: async () => true, listApps: listed({ uid: 'app-1', puterDevices: true }) })).resolves.toBe('puter');
+        await expect(pushGrantOf('app-1', { holds: async () => true, listApps: listed({ uid: 'app-1', puterDevices: false }) })).resolves.toBe('website');
+    });
+});
+
+describe('cachedPushApps', () => {
+    const answer = (apps) => new Response(JSON.stringify({ apps }), { status: 200 });
+
+    beforeEach(() => {
+        globalThis.window = globalThis.window ?? globalThis;
+        window.api_origin = 'https://api.puter.test';
+        globalThis.user = { uuid: 'u-1' };
+        forgetPushApps();
+        globalThis.fetch = vi.fn(async () => answer([{ uid: 'app-1' }]));
+    });
+
+    it('reuses one answer for the same user within the time limit', async () => {
+        await cachedPushApps(1000);
+        await expect(cachedPushApps(1000 + PUSH_APPS_TTL_MS - 1)).resolves.toEqual([{ uid: 'app-1' }]);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        await cachedPushApps(1000 + PUSH_APPS_TTL_MS);
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks again for another user, after a grant changed, and after a failure', async () => {
+        await cachedPushApps(1000);
+        globalThis.user = { uuid: 'u-2' };
+        await cachedPushApps(1000);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        await revokePushApp('app-1');
+        await cachedPushApps(1000);
+        expect(fetch.mock.calls.filter(([url]) => url.endsWith('/push/apps'))).toHaveLength(3);
+
+        forgetPushApps();
+        fetch.mockResolvedValueOnce(new Response('{}', { status: 500 }));
+        await expect(cachedPushApps(1000)).rejects.toThrow();
+        await expect(cachedPushApps(1000)).resolves.toEqual([{ uid: 'app-1' }]);
+    });
+});
+

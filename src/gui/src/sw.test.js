@@ -21,6 +21,14 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+    HANDLERS_STORE,
+    PUSH_DB_NAME,
+    RECEIPT_PREFIX,
+    SERVER_KEY_ENTRY,
+    SERVER_KEYS_ENTRY,
+    SUBSCRIPTION_CHANGED_PREFIX,
+} from '../../puter-js/src/modules/notifications/lib/pushStore.js';
 
 // The worker is a classic script; run it as one, against a stand-in scope.
 const SOURCE = readFileSync(fileURLToPath(new URL('./sw.js', import.meta.url)), 'utf8');
@@ -354,19 +362,38 @@ describe('service worker notificationclick', () => {
 describe('service worker pushsubscriptionchange', () => {
     const KEY = Buffer.from([4, 9, 8, 7]).toString('base64url');
     const OTHER_KEY = Buffer.from([4, 1, 2]).toString('base64url');
-    const CHANGED = `puter:subscription-changed:${ORIGIN}/`;
-    const RECEIPT = `puter:receipt:${ORIGIN}/`;
+    const CHANGED = `${SUBSCRIPTION_CHANGED_PREFIX}${ORIGIN}/`;
+    const RECEIPT = `${RECEIPT_PREFIX}${ORIGIN}/`;
     const keyOf = (value) => ({ options: { applicationServerKey: new Uint8Array(Buffer.from(value, 'base64url')).buffer } });
-    const pushOn = { 'puter:server-key': KEY, [RECEIPT]: { endpoint: 'https://push.example/1', receipt: 'r.sig' } };
+    const pushOn = { [SERVER_KEY_ENTRY]: KEY, [RECEIPT]: { endpoint: 'https://push.example/1', receipt: 'r.sig' } };
 
-    it('keeps the new subscription the browser gave, marks it and forgets the receipt', async () => {
+    it('keeps its own copy of the entries puter.js stores', () => {
+        for ( const [name, value] of Object.entries({
+            DB_NAME: PUSH_DB_NAME,
+            HANDLERS: HANDLERS_STORE,
+            SERVER_KEY: SERVER_KEY_ENTRY,
+            SERVER_KEYS: SERVER_KEYS_ENTRY,
+            CHANGED_PREFIX: SUBSCRIPTION_CHANGED_PREFIX,
+            RECEIPT_PREFIX,
+        }) ) {
+            expect(SOURCE).toContain(`const ${name} = '${value}';`);
+        }
+    });
+
+    it('keeps the new subscription the browser gave, marks it with the old endpoint and forgets the receipt', async () => {
         const win = windowClient(`${ORIGIN}/desktop`);
         const worker = loadWorker({ windows: [win], handlers: pushOn });
         await worker.fire('pushsubscriptionchange', { oldSubscription: keyOf(KEY), newSubscription: { endpoint: 'https://push.example/2' } });
-        expect(worker.idb.map.get(CHANGED)).toEqual(expect.any(Number));
+        expect(worker.idb.map.get(CHANGED)).toEqual({ at: expect.any(Number), oldEndpoint: 'https://push.example/1' });
         expect(worker.idb.map.has(RECEIPT)).toBe(false);
         expect(worker.scope.registration.pushManager.subscribe).not.toHaveBeenCalled();
         expect(win.postMessage).toHaveBeenCalledWith({ type: 'puter-push-subscription-changed' });
+    });
+
+    it('marks the endpoint of the subscription the browser ended, over the receipt`s', async () => {
+        const worker = loadWorker({ handlers: pushOn });
+        await worker.fire('pushsubscriptionchange', { oldSubscription: { ...keyOf(KEY), endpoint: 'https://push.example/old' } });
+        expect(worker.idb.map.get(CHANGED)).toEqual({ at: expect.any(Number), oldEndpoint: 'https://push.example/old' });
     });
 
     it('subscribes again with Puter`s stored key when the browser dropped it', async () => {

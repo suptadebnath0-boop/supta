@@ -18,12 +18,20 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { SUBSCRIPTION_CHANGED_PREFIX as STORED_CHANGED_PREFIX } from '../../../puter-js/src/modules/notifications/lib/pushStore.js';
+import { cachedPushApps } from './notificationApi.js';
 import { registerPushClient } from './pushClient.js';
 import { syncBrowserPush } from './pushSync.js';
-import { webPushClient } from './webPushClient.js';
+import { LAST_ENDPOINT_KEY, SUBSCRIPTION_CHANGED_PREFIX, webPushClient } from './webPushClient.js';
 
 const SCOPE = 'https://puter.test/';
-const CHANGED = `puter:subscription-changed:${SCOPE}`;
+const CHANGED = `${STORED_CHANGED_PREFIX}${SCOPE}`;
+
+/** `localStorage` over a Map. */
+const fakeStorage = (entries = {}) => {
+    const map = new Map(Object.entries(entries));
+    return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, String(v)), removeItem: (k) => void map.delete(k) };
+};
 
 /** IndexedDB with one store's worth of entries, answering on a microtask. */
 const fakeIdb = (entries = {}) => {
@@ -46,7 +54,7 @@ const fakeIdb = (entries = {}) => {
     };
 };
 
-const make = ({ on = true, devices = [], permission = 'granted', subscription = { endpoint: 'https://push.test/1' }, user = 'u-1', serverState = 'active', idb = fakeIdb() } = {}) => {
+const make = ({ on = true, devices = [], permission = 'granted', subscription = { endpoint: 'https://push.test/1' }, user = 'u-1', serverState = 'active', idb = fakeIdb(), storage = fakeStorage() } = {}) => {
     const notifications = {
         enable: vi.fn(async () => on),
         _enableWebPush: vi.fn(async () => {}),
@@ -65,8 +73,8 @@ const make = ({ on = true, devices = [], permission = 'granted', subscription = 
         for ( const fn of listeners ) fn({ data });
     };
     const endpointState = vi.fn(async () => state.serverState);
-    const client = webPushClient({ notifications, NotificationApi: { permission }, nav, userUid: () => state.user, idb, endpointState });
-    return { notifications, client, post, state, endpointState, idb };
+    const client = webPushClient({ notifications, NotificationApi: { permission }, nav, userUid: () => state.user, idb, endpointState, storage });
+    return { notifications, client, post, state, endpointState, idb, storage };
 };
 
 const current = { uid: 'd1', platform: 'webpush', current: true };
@@ -264,3 +272,85 @@ describe('webPushClient status with cached', () => {
         expect(notifications.listDevices).not.toHaveBeenCalled();
     });
 });
+
+describe('webPushClient and a browser removed from another device', () => {
+    const OLD = 'https://push.test/0';
+    const NEW = { endpoint: 'https://push.test/1', unsubscribe: vi.fn(async () => true) };
+    const OPT_OUT = 'puter.push.browser-off:u-1';
+    const sync = (storage) => syncBrowserPush({}, { NotificationApi: { permission: 'granted' }, userUid: 'u-1', storage, holdsPush: async () => true });
+
+    const removedElsewhere = (over) => {
+        globalThis.gui_params = { pushEnabled: true };
+        NEW.unsubscribe.mockClear();
+        const made = make({ devices: [], subscription: NEW, ...over });
+        made.endpointState.mockImplementation(async (endpoint) => (endpoint === OLD ? 'removed' : 'unknown'));
+        registerPushClient(made.client);
+        return made;
+    };
+
+    it('stays off after a subscription change, and records it as turned off', async () => {
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
+        await expect(sync(made.storage)).resolves.toBe('removed');
+        expect(made.endpointState).toHaveBeenCalledWith(OLD);
+        expect(made.notifications._enableWebPush).not.toHaveBeenCalled();
+        expect(NEW.unsubscribe).toHaveBeenCalledTimes(1);
+        expect(made.idb.map.has(CHANGED)).toBe(false);
+        expect(made.storage.map.get(OPT_OUT)).toBe('1');
+        await expect(sync(made.storage)).resolves.toBe('opted_out');
+    });
+
+    it('stays off after the browser dropped the subscription, from the last endpoint the server confirmed', async () => {
+        const made = removedElsewhere({ subscription: null, storage: fakeStorage({ [LAST_ENDPOINT_KEY]: OLD }) });
+        await expect(sync(made.storage)).resolves.toBe('removed');
+        expect(made.notifications._enableWebPush).not.toHaveBeenCalled();
+        expect(made.storage.map.get(OPT_OUT)).toBe('1');
+    });
+
+    it('turns back on from a click, which keeps the new endpoint', async () => {
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
+        await sync(made.storage);
+        made.notifications.listDevices.mockResolvedValue([current]);
+        await expect(made.client.enable()).resolves.toEqual({ deviceUid: 'd1' });
+        expect(made.notifications.enable).toHaveBeenCalledTimes(1);
+        expect(made.storage.map.get(LAST_ENDPOINT_KEY)).toBe(NEW.endpoint);
+    });
+
+    it('registers in the background as before when the old endpoint wasn`t removed', async () => {
+        const made = removedElsewhere({ idb: fakeIdb({ [CHANGED]: { at: 1, oldEndpoint: OLD } }) });
+        made.endpointState.mockResolvedValue('unknown');
+        made.notifications.listDevices.mockResolvedValue([current]);
+        await expect(sync(made.storage)).resolves.toBe('on');
+        expect(made.notifications._enableWebPush).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('webPushClient requests', () => {
+    it('shares one real check among status reads of the same user and endpoint', async () => {
+        const { client, notifications, endpointState } = make({ devices: [current] });
+        const reads = await Promise.all([client.status({ cached: true }), client.status({ cached: true }), client.status()]);
+        expect(reads.every((r) => r.registered)).toBe(true);
+        expect(notifications.listDevices).toHaveBeenCalledTimes(1);
+        expect(endpointState).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops the page`s /push/apps answer on enable() and disable()', async () => {
+        globalThis.window = globalThis.window ?? globalThis;
+        window.api_origin = 'https://api.puter.test';
+        globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ apps: [] }), { status: 200 }));
+        const { client } = make({ devices: [current] });
+        await cachedPushApps();
+        await cachedPushApps();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        await client.enable();
+        await cachedPushApps();
+        expect(fetch).toHaveBeenCalledTimes(2);
+        await client.disable();
+        await cachedPushApps();
+        expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('reads the marker under the key puter.js and the worker use', () => {
+        expect(SUBSCRIPTION_CHANGED_PREFIX).toBe(STORED_CHANGED_PREFIX);
+    });
+});
+

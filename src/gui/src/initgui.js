@@ -72,7 +72,8 @@ import {
 } from './util/authmeGrant.js';
 import init_device_signals from './helpers/deviceSignals.js';
 import { holdsPermissions } from './helpers/holdsPermissions.js';
-import { appHoldsForPuter, appPushesToPuter } from './helpers/pushApps.js';
+import { askPushPermission } from './helpers/askPushPermission.js';
+import { appHoldsForPuter, pushGrantOf } from './helpers/pushApps.js';
 import { PUSH_PERMISSION, withEnableDeadline } from './helpers/pushClient.js';
 import { startPushWorker } from './helpers/pushWorker.js';
 import item_icon from './helpers/itemIcon.js';
@@ -916,9 +917,14 @@ const postAuthActions = async (action) => {
             }
             // The dialog says this site wants to send pushes, so only a site whose app may.
             const app_uid = await window.getAppUIDFromOrigin(origin);
-            if ( app_uid && await appPushesToPuter(app_uid) ) {
+            const grant = app_uid ? await pushGrantOf(app_uid) : 'none';
+            if ( grant === 'puter' ) {
                 startPushWorker();
                 state = await UIEnablePushDialog({ origin });
+            } else if ( grant === 'website' ) {
+                // Its site's own Web Push grant doesn't reach Puter, so Puter's prompt asks first.
+                startPushWorker();
+                state = await askPushPermission({ origin });
             }
         } catch (e) {
             console.error('enable-push action failed', e);

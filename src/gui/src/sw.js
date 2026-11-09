@@ -21,9 +21,7 @@
 // Push payload: JSON whose `puter` (or `data.puter`, an object or JSON string)
 // is { uid, title, body, icon, group, target: { app, path }, data, ts }, plus
 // `app: { uid, name, icon }` when an app sent it.
-// On `pushsubscriptionchange` it keeps Puter's subscription, marks it for the
-// next load to register in full, and posts
-// { type: 'puter-push-subscription-changed' } to this origin's windows.
+// On `pushsubscriptionchange` it keeps Puter's subscription, marks it, and tells this origin's windows.
 // A `type: 'challenge'` message is shown, then its `challenge` is posted to
 // this origin's windows as { type: 'puter-push-challenge', challenge } for the
 // page to confirm the subscription with the server.
@@ -276,7 +274,10 @@ async function keepSubscription (scope, event) {
     if ( ! keys.length ) return;
     const old = event.oldSubscription?.options?.applicationServerKey;
     if ( old && ! keys.some((key) => sameKey(old, key)) ) return;
-    await idb('readwrite', (s) => s.put(Date.now(), CHANGED_PREFIX + registration.scope));
+    // The page asks the server whether the old endpoint was removed before registering again.
+    const receipt = await idb('readonly', (s) => s.get(RECEIPT_PREFIX + registration.scope));
+    const oldEndpoint = nonEmptyString(event.oldSubscription?.endpoint) ?? nonEmptyString(receipt?.endpoint);
+    await idb('readwrite', (s) => s.put({ at: Date.now(), ...(oldEndpoint ? { oldEndpoint } : {}) }, CHANGED_PREFIX + registration.scope));
     // The receipt names the old endpoint and keys.
     await idb('readwrite', (s) => s.delete(RECEIPT_PREFIX + registration.scope));
     if ( event.newSubscription ) return;

@@ -57,6 +57,7 @@ vi.mock('./helpers/verification_gates.js', () => ({
 let iframe;
 let posted;
 let registerPushClient;
+let forgetPushApps;
 /** What this browser's push client reports. */
 let browser;
 
@@ -64,6 +65,7 @@ beforeAll(async () => {
     window.when_puter_happens = [];
     window.appCallbackFunctions = {};
     ({ registerPushClient } = await import('./helpers/pushClient.js'));
+    ({ forgetPushApps } = await import('./helpers/notificationApi.js'));
     await import('./IPC.js');
     globalThis.puter = { services: undefined, util: { rpc: { send: vi.fn() } } };
     for (const fn of window.when_puter_happens) await fn();
@@ -72,6 +74,7 @@ beforeAll(async () => {
 beforeEach(() => {
     dialog.mockReset();
     permissionDialog.mockReset();
+    forgetPushApps();
     browser = { permission: 'granted', registered: false };
     window.gui_params = { pushEnabled: true };
     registerPushClient({

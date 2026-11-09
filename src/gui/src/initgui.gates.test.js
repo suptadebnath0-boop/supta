@@ -110,11 +110,17 @@ describe('the permission popup and browser push', () => {
 
     it('shows the enable-push dialog only for a site whose app may push to Puter devices', () => {
         const resolved = enablePush.indexOf('await window.getAppUIDFromOrigin(origin)');
-        const checked = enablePush.indexOf('await appPushesToPuter(app_uid)');
+        const checked = enablePush.indexOf('await pushGrantOf(app_uid)');
         const dialog = enablePush.indexOf('await UIEnablePushDialog({ origin })');
         expect(resolved).toBeGreaterThan(-1);
         expect(checked).toBeGreaterThan(resolved);
         expect(dialog).toBeGreaterThan(checked);
+    });
+
+    it('asks Puter`s permission in the enable-push popup for a site holding only its own Web Push grant', () => {
+        const website = enablePush.indexOf("grant === 'website'");
+        expect(website).toBeGreaterThan(-1);
+        expect(enablePush.indexOf('await askPushPermission({ origin })')).toBeGreaterThan(website);
     });
 
     it('answers an enable-push opener it cannot attest, like a permission prompt', () => {

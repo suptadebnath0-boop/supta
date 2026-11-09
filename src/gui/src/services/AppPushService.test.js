@@ -25,6 +25,7 @@ globalThis.use = globalThis.use ?? (() => ({}));
 
 let AppPushService;
 let registerPushClient;
+let forgetPushApps;
 /** What this browser's push client reports. */
 let browser;
 /** What `/auth/check-permissions` answers for `notifications:push`. */
@@ -35,6 +36,7 @@ let apps;
 beforeAll(async () => {
     globalThis.window = globalThis.window ?? globalThis;
     ({ registerPushClient } = await import('../helpers/pushClient.js'));
+    ({ forgetPushApps } = await import('../helpers/notificationApi.js'));
     ({ AppPushService } = await import('./AppPushService.js'));
 });
 
@@ -55,6 +57,7 @@ beforeEach(() => {
     browser = { permission: 'granted', registered: true };
     held = true;
     apps = [];
+    forgetPushApps();
     window.gui_params = { pushEnabled: true };
     window.api_origin = 'https://api.puter.test';
     window.auth_token = 'tok-1';
@@ -110,9 +113,9 @@ describe('the pushStatus IPC handler', () => {
     });
 
     it('checks the calling app on every call, while the browser answers from its last on', async () => {
+        apps = [{ uid: 'app-1', name: 'chat', puterDevices: true }, { uid: 'app-2', name: 'site', puterDevices: false }];
         const { pushStatus } = await makeService();
         await expect(pushStatus({}, from('app-1'))).resolves.toEqual({ state: 'on' });
-        apps = [{ uid: 'app-2', name: 'site', puterDevices: false }];
         await expect(pushStatus({}, from('app-2'))).resolves.toEqual({ state: 'off' });
         expect(browser.asked).toEqual({ cached: true });
     });
