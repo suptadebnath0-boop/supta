@@ -74,7 +74,8 @@ describe('syncBrowserPush with the built-in client', () => {
                 addEventListener: () => {},
             },
         };
-        registerPushClient(webPushClient({ notifications, NotificationApi: granted, nav, userUid: () => 'u-1' }));
+        notifications.endpointState = vi.fn(async () => 'active');
+        registerPushClient(webPushClient({ notifications, NotificationApi: granted, nav, userUid: () => 'u-1', endpointState: notifications.endpointState }));
         return notifications;
     };
 
@@ -84,6 +85,7 @@ describe('syncBrowserPush with the built-in client', () => {
         await expect(syncBrowserPush({ appUid: 'app-1' }, deps)).resolves.toBe('on');
         await expect(syncBrowserPush({ appUid: 'app-2' }, deps)).resolves.toBe('on');
         expect(notifications.listDevices).toHaveBeenCalledTimes(1);
+        expect(notifications.endpointState).toHaveBeenCalledTimes(1);
     });
 
     it('does not subscribe again, and stays off, when the user removed this browser in Puter', async () => {

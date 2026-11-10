@@ -19,8 +19,8 @@
 
 // Registers this browser again without a click where the browser already allows it.
 
-import { appHoldsPermissions } from './holdsPermissions.js';
 import { listPushApps } from './notificationApi.js';
+import { appHoldsForPuter, pushesToPuter } from './pushApps.js';
 import {
     browserPushOptedOut,
     browserPushState,
@@ -29,7 +29,7 @@ import {
     setBrowserPushOptOut,
 } from './pushClient.js';
 
-/** @typedef {'skipped'|'opted_out'|'unavailable'|'blocked'|'on'|'off'|'no_app'|'removed'|'failed'} PushSyncResult */
+/** @typedef {'skipped'|'opted_out'|'unavailable'|'blocked'|'on'|'off'|'no_app'|'removed'|'later'|'failed'} PushSyncResult */
 
 /** @type {Promise<PushSyncResult>|null} */
 let inFlight = null;
@@ -43,16 +43,12 @@ export const syncBrowserPush = (scope, deps) => {
     return inFlight;
 };
 
-/** An app a website's Web Push confirmation let in pushes only to that website's browsers, not to Puter's. */
-const pushesToPuter = (app) => app?.puterDevices !== false;
-
 const runSync = async ({ appUid } = {}, {
     NotificationApi = globalThis.Notification,
     userUid = globalThis.user?.uuid,
     storage = globalThis.localStorage,
     holdsPush = async () => (appUid
-        ? await appHoldsPermissions([PUSH_PERMISSION], appUid)
-            && pushesToPuter((await listPushApps()).find((app) => app.uid === appUid))
+        ? await appHoldsForPuter([PUSH_PERMISSION], appUid)
         : (await listPushApps()).some(pushesToPuter)),
 } = {}) => {
     if ( NotificationApi?.permission !== 'granted' || ! userUid ) return 'skipped';
@@ -73,6 +69,7 @@ const runSync = async ({ appUid } = {}, {
             setBrowserPushOptOut(userUid, true, storage);
             return 'removed';
         }
+        if ( e?.code === 'too_many_requests' ) return 'later';
         console.debug('[push] enable failed', e);
         return 'failed';
     }

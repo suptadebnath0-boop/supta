@@ -1,0 +1,65 @@
+/*
+ * Copyright (C) 2024-present Puter Technologies Inc.
+ *
+ * This file is part of Puter.
+ *
+ * Puter is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+import { appHoldsPermissions } from './holdsPermissions.js';
+import { cachedPushApps, PUSH_UNAVAILABLE } from './notificationApi.js';
+import { PUSH_PERMISSION } from './pushClient.js';
+
+/** An app a website's Web Push confirmation let in pushes only to that website's browsers, not to Puter's. @param {import('./notificationApi.js').PushApp|undefined} app */
+export const pushesToPuter = (app) => app?.puterDevices !== false;
+
+/** @typedef {{ holds?: (permissions: string[], appUid: string) => Promise<boolean>, listApps?: () => Promise<import('./notificationApi.js').PushApp[]> }} PushAppsDeps */
+
+/** Whether the app's push grant reaches Puter's devices; rejects when the app list can't be read. */
+const listedForPuter = async (appUid, listApps) => {
+    let apps;
+    try {
+        apps = await listApps();
+    } catch ( e ) {
+        // Without the push routes, or while they turn callers away, the grant alone counts.
+        if ( e?.code === PUSH_UNAVAILABLE || e?.status === 429 ) return true;
+        throw e;
+    }
+    return pushesToPuter(apps.find((app) => app.uid === appUid));
+};
+
+/** Whether the app holds all of `permissions`, push counting only for Puter's devices; rejects when the app list can't be read. @param {string[]} permissions @param {string} appUid @param {PushAppsDeps} [deps] @returns {Promise<boolean>} */
+export const appHoldsForPuter = async (permissions, appUid, {
+    holds = appHoldsPermissions,
+    listApps = cachedPushApps,
+} = {}) => {
+    if ( ! await holds(permissions, appUid) ) return false;
+    if ( ! permissions.includes(PUSH_PERMISSION) ) return true;
+    return await listedForPuter(appUid, listApps);
+};
+
+/** The app's push grant: none, Puter's own, or only its website's Web Push; rejects when the app list can't be read. @param {string} appUid @param {PushAppsDeps} [deps] @returns {Promise<'none'|'puter'|'website'>} */
+export const pushGrantOf = async (appUid, {
+    holds = appHoldsPermissions,
+    listApps = cachedPushApps,
+} = {}) => {
+    if ( ! await holds([PUSH_PERMISSION], appUid) ) return 'none';
+    return await listedForPuter(appUid, listApps) ? 'puter' : 'website';
+};
+
+/** `appHoldsForPuter` for `notifications:push` alone, `false` when it can't tell. @param {string} appUid @returns {Promise<boolean>} */
+export const appPushesToPuter = (appUid) => appHoldsForPuter([PUSH_PERMISSION], appUid).catch((e) => {
+    console.warn('[push] could not tell whether an app may push to Puter', e);
+    return false;
+});
