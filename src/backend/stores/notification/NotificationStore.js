@@ -43,6 +43,9 @@ const SEND_KEY_REPROBE_MS = 60_000;
 const groupKey = (group) =>
     group ? createHash('sha256').update(group, 'utf8').digest('hex') : null;
 
+const serialize = (value) =>
+    typeof value === 'string' ? value : JSON.stringify(value ?? {});
+
 const pageLimit = (limit) => {
     const n = Number(limit);
     return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 50;
@@ -403,8 +406,7 @@ export class NotificationStore extends PuterStore {
     }) {
         if (!userId) throw new Error('create: userId is required');
         const db = this.clients.db;
-        const serialized =
-            typeof value === 'string' ? value : JSON.stringify(value ?? {});
+        const serialized = serialize(value);
         const createdAt = Math.floor(Date.now() / 1000);
         const key = groupKey(group);
         const { insertId } = await db.write(
@@ -428,16 +430,6 @@ export class NotificationStore extends PuterStore {
             replaced_at: null,
             send_key: null,
         });
-    }
-
-    /**
-     * `create` for a caller that needs only the uid.
-     *
-     * @param {NotificationInsert} args
-     * @returns {Promise<string>}
-     */
-    async insert(args) {
-        return (await this.create(args)).uid;
     }
 
     /**
@@ -554,8 +546,7 @@ export class NotificationStore extends PuterStore {
         { onlyUnseen = false, replacedAt = undefined } = {},
     ) {
         const db = this.clients.db;
-        const serialized =
-            typeof value === 'string' ? value : JSON.stringify(value ?? {});
+        const serialized = serialize(value);
         const set = ['`value` = ?', '`shown` = NULL'];
         if (await this.#hasSendKey()) set.push('`send_key` = NULL');
         const params = [serialized];
@@ -575,18 +566,40 @@ export class NotificationStore extends PuterStore {
         return result.anyRowsAffected;
     }
 
+    /** The row `updateValue` leaves on a replacement at `replacedAt` (ms). */
+    replacedRow(row, value, replacedAt) {
+        const replaced = {
+            ...row,
+            value: serialize(value),
+            shown: null,
+            created_at: this.clients.db.timestampValue(
+                Math.floor(replacedAt / 1000),
+            ),
+            replaced_at: replacedAt,
+        };
+        if ('send_key' in row) replaced.send_key = null;
+        return this.#normalizeRow(replaced);
+    }
+
+    // The event's columns never change: replica first, primary when it lags.
     async markAcknowledged(uid, userId) {
+        const db = this.clients.db;
         const now = Math.floor(Date.now() / 1000);
-        const result = await this.clients.db.write(
-            'UPDATE `notification` SET `acknowledged` = ? WHERE `uid` = ? AND `user_id` = ? AND `acknowledged` IS NULL',
-            [now, uid, userId],
-        );
+        const fixed =
+            'SELECT `type`, `app_uid`, `audience` FROM `notification` WHERE `uid` = ? AND `user_id` = ? LIMIT 1';
+        const [result, replica] = await Promise.all([
+            db.write(
+                'UPDATE `notification` SET `acknowledged` = ? WHERE `uid` = ? AND `user_id` = ? AND `acknowledged` IS NULL',
+                [now, uid, userId],
+            ),
+            db.read(fixed, [uid, userId]).catch(() => []),
+        ]);
         if (result.anyRowsAffected) {
             try {
-                const [row] = await this.clients.db.pread(
-                    'SELECT `type`, `app_uid`, `audience` FROM `notification` WHERE `uid` = ? AND `user_id` = ? LIMIT 1',
-                    [uid, userId],
-                );
+                const [row] =
+                    replica.length > 0
+                        ? replica
+                        : await db.pread(fixed, [uid, userId]);
                 if (row?.type === 'app.message' && row.app_uid) {
                     this.clients.event.emit(
                         'notif.acknowledged',
