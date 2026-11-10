@@ -23,7 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PuterServer } from '../../server.ts';
 import { PermissionUtil } from '../../services/permission/permissionUtil.ts';
-import { setupTestServer } from '../../testUtil.ts';
+import { lagReadReplica, setupTestServer } from '../../testUtil.ts';
 import { decodeCursor } from '../../util/pagination.ts';
 import { CACHE_TOMBSTONE_SUFFIX } from '../types.ts';
 import {
@@ -1157,6 +1157,99 @@ describe('PermissionStore', () => {
                 ]),
             ).toBe(false);
             expect(await store.hasAnyAccessTokenPerm(tokenUid, [])).toBe(false);
+        });
+
+        const TOKEN_PERM_QUERIES = /FROM `access_token_permissions`/;
+        const cachedTokenPerms = (tokenUid: string) =>
+            server.clients.redis.get(`perms:token:${tokenUid}`);
+
+        it("finds a new token's grants while the replica lags, and caches no empty list", async () => {
+            const tokenUid = `tok-${uuidv4()}`;
+            const replica = await lagReadReplica(server, TOKEN_PERM_QUERIES);
+            try {
+                await store.insertAccessTokenPerms(
+                    tokenUid,
+                    { userId: 7, appId: null },
+                    [{ permission: 'fs:abc:read' }],
+                );
+                expect(await store.listAccessTokenPerms(tokenUid)).toEqual([
+                    'fs:abc:read',
+                ]);
+
+                await server.clients.redis.del(`perms:token:${tokenUid}`);
+                expect(await store.listAccessTokenPerms(tokenUid)).toEqual([
+                    'fs:abc:read',
+                ]);
+                await vi.waitFor(async () =>
+                    expect(await cachedTokenPerms(tokenUid)).toBe(
+                        '["fs:abc:read"]',
+                    ),
+                );
+                expect(await store.getAccessTokenAuthorizerId(tokenUid)).toBe(
+                    7,
+                );
+            } finally {
+                replica.catchUp();
+            }
+        });
+
+        it('reads the primary only when the replica has no rows', async () => {
+            const tokenUid = `tok-${uuidv4()}`;
+            await store.insertAccessTokenPerms(
+                tokenUid,
+                { userId: 7, appId: null },
+                [{ permission: 'fs:abc:read' }],
+            );
+            await server.clients.redis.del(`perms:token:${tokenUid}`);
+
+            const current = await lagReadReplica(server, TOKEN_PERM_QUERIES, {
+                mode: 'current',
+            });
+            try {
+                expect(await store.listAccessTokenPerms(tokenUid)).toEqual([
+                    'fs:abc:read',
+                ]);
+                expect(await store.getAccessTokenAuthorizerId(tokenUid)).toBe(
+                    7,
+                );
+                expect(current.primaryReads()).toBe(0);
+            } finally {
+                current.catchUp();
+            }
+
+            const lagging = await lagReadReplica(server, TOKEN_PERM_QUERIES);
+            try {
+                expect(await store.getAccessTokenAuthorizerId(tokenUid)).toBe(
+                    7,
+                );
+                expect(lagging.primaryReads()).toBe(1);
+            } finally {
+                lagging.catchUp();
+            }
+        });
+
+        it('caches nothing when the token is deleted while its grants are being cached', async () => {
+            const tokenUid = `tok-${uuidv4()}`;
+            const db = server.clients.db;
+            const pread = db.pread.bind(db);
+            const seedRead = vi
+                .spyOn(db, 'pread')
+                .mockImplementationOnce(async (sql, params) => {
+                    const rows = await pread(sql, params);
+                    await store.deleteAccessTokenPerms(tokenUid);
+                    return rows;
+                });
+            try {
+                await store.insertAccessTokenPerms(
+                    tokenUid,
+                    { userId: 7, appId: null },
+                    [{ permission: 'fs:abc:read' }],
+                );
+            } finally {
+                seedRead.mockRestore();
+            }
+            expect(await cachedTokenPerms(tokenUid)).toBeNull();
+            expect(await store.listAccessTokenPerms(tokenUid)).toEqual([]);
         });
     });
 
