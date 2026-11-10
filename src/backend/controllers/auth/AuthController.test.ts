@@ -10082,6 +10082,77 @@ describe('AuthController.handleRevokeSession additional branches', () => {
         expect(Array.isArray(body.sessions)).toBe(true);
     });
 
+    const expiredSessionOf = async (user: { id: number }) => {
+        const row = await server.stores.session.create(user.id, {
+            expires_at: Math.floor(Date.now() / 1000) - 1,
+        });
+        return row.uuid as string;
+    };
+
+    it('revokes an expired session the caller owns', async () => {
+        const { user, actor } = await makeUserAndActor();
+        const uuid = await expiredSessionOf(user);
+        const res = makeRes();
+        await controller.handleRevokeSession(makeReq({ uuid }, { actor }), res);
+
+        const body = res.body as { sessions: Array<{ uuid: string }> };
+        expect(body.sessions.map((s) => s.uuid)).not.toContain(uuid);
+        const rows = await server.clients.db.read(
+            'SELECT `revoked_at` FROM `sessions` WHERE `uuid` = ?',
+            [uuid],
+        );
+        expect(rows[0].revoked_at).not.toBeNull();
+    });
+
+    it('revoking an expired session ends its live child token', async () => {
+        const { user, actor } = await makeUserAndActor();
+        const parent = await expiredSessionOf(user);
+        const child = await server.stores.session.getOrCreateGodmodeToken(
+            user.id,
+            {
+                parentSessionUid: parent,
+                appUid: `app-${uuidv4()}`,
+                expiresAt: Math.floor(Date.now() / 1000) + 3600,
+                maxAgeSeconds: 3600,
+                label: 'Godmode app',
+                auth_id: user.uuid,
+            },
+        );
+        const childUuid = child!.row.uuid as string;
+        expect(await server.stores.session.getByUuid(childUuid)).toBeTruthy();
+
+        await controller.handleRevokeSession(
+            makeReq({ uuid: parent }, { actor }),
+            makeRes(),
+        );
+
+        expect(await server.stores.session.getByUuid(childUuid)).toBeNull();
+    });
+
+    it('answers 403 for an expired session of another user', async () => {
+        const { user: owner } = await makeUserAndActor();
+        const { actor } = await makeUserAndActor();
+        const uuid = await expiredSessionOf(owner);
+        await expect(
+            controller.handleRevokeSession(
+                makeReq({ uuid }, { actor }),
+                makeRes(),
+            ),
+        ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it('answers 404 for a session that is already revoked', async () => {
+        const { user, actor } = await makeUserAndActor();
+        const row = await server.stores.session.create(user.id);
+        await server.stores.session.removeByUuid(row.uuid);
+        await expect(
+            controller.handleRevokeSession(
+                makeReq({ uuid: row.uuid }, { actor }),
+                makeRes(),
+            ),
+        ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
     it('refuses to revoke the caller’s OWN current session row (400)', async () => {
         // Invariant: a self-revoke leaves the client in an ambiguous
         // identity state because the response can't write fresh auth
