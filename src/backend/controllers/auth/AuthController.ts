@@ -71,6 +71,7 @@ import { sessionCookieFlags } from '../../util/cookieFlags.js';
 import { cleanEmail, isStorableEmail } from '../../util/email.js';
 import { isGodmodeApp } from '../../util/godmodeApps.js';
 import { parsePhone } from '../../util/phone.js';
+import { deleteIfEqual } from '../../util/redisLock.js';
 import {
     bonusCodeInvalidError,
     checkSignupBonus,
@@ -142,6 +143,10 @@ const GRANT_EXTRA_MAX_BYTES = 4096;
 const DISPATCH_ID_MAX_LENGTH = 128;
 // One name for the flag, so the write and the read cannot drift apart.
 const APP_AUTHENTICATED_FLAG = 'flag:app-is-authenticated';
+
+// Long enough to span the gap between one `/login/wait` and the client's next.
+const LOGIN_RELAY_TTL_SECONDS = 120;
+const loginRelayKey = (session: string) => `login:relay:${session}`;
 
 // -- Post-login route limits -----------------------------------------
 //
@@ -348,17 +353,33 @@ export class AuthController extends PuterController {
         const { resolve, promise } = Promise.withResolvers<void>();
 
         let token: string | null = null;
-        const listener = (_key: string, value: { authtoken: string }) => {
+        // Only a token that `/login/set` managed to store has a copy to take.
+        let stored = true;
+        const listener = (
+            _key: string,
+            value: { authtoken: string; stored?: boolean },
+        ) => {
             token = value.authtoken;
+            stored = value.stored === true;
             resolve();
         };
         this.clients.event.on(`pubsub.login.${session}`, listener);
-
-        const timeout = new Promise<void>((resolve) =>
-            setTimeout(resolve, 10000),
-        );
-        await Promise.race([promise, timeout]);
-        this.clients.event.off(`pubsub.login.${session}`, listener);
+        try {
+            // Read after subscribing, so a token set before this wait is still delivered.
+            const kept = await this.clients.redis.get(loginRelayKey(session));
+            // A stored token for another app is skipped and the wait runs as usual.
+            if (kept && this.#tokenIsForApp(kept, expectedAppUid)) {
+                token = kept;
+                stored = true;
+            } else {
+                const timeout = new Promise<void>((resolve) =>
+                    setTimeout(resolve, 10000),
+                );
+                await Promise.race([promise, timeout]);
+            }
+        } finally {
+            this.clients.event.off(`pubsub.login.${session}`, listener);
+        }
         if (!token) {
             throw new HttpError(408, 'Request timeout.', {
                 legacyCode: 'request_timeout',
@@ -375,6 +396,21 @@ export class AuthController extends PuterController {
             // Deliberately the same 408 the no-token path returns: a caller
             // learns only that nothing arrived for them, not that a token
             // for a different app went past.
+            throw new HttpError(408, 'Request timeout.', {
+                legacyCode: 'request_timeout',
+            });
+        }
+
+        // Taking the stored copy hands each token out once; any leftover copy is removed.
+        const took = await deleteIfEqual(
+            this.clients.redis,
+            loginRelayKey(session),
+            token,
+        ).catch((e: unknown) => {
+            if (stored) throw e;
+            return false;
+        });
+        if (stored && !took) {
             throw new HttpError(408, 'Request timeout.', {
                 legacyCode: 'request_timeout',
             });
@@ -418,16 +454,37 @@ export class AuthController extends PuterController {
     })
     async loginSet(req: Request, res: Response) {
         const { session, auth_token } = req.body ?? {};
-        if (!session || !auth_token || !validateUuid(session)) {
+        if (
+            !session ||
+            typeof auth_token !== 'string' ||
+            !auth_token ||
+            !validateUuid(session)
+        ) {
             throw new HttpError(400, 'session and auth_token are required.', {
                 legacyCode: 'bad_request',
             });
         }
 
+        let stored = true;
+        try {
+            await this.clients.redis.set(
+                loginRelayKey(session),
+                auth_token,
+                'EX',
+                LOGIN_RELAY_TTL_SECONDS,
+            );
+        } catch (e) {
+            stored = false;
+            console.warn(
+                '[login-set] storing the relayed token failed:',
+                e instanceof Error ? e.message : String(e),
+            );
+        }
         this.clients.event.emit(
             `pubsub.login.${session}`,
             {
                 authtoken: auth_token,
+                stored,
             },
             {},
         );
